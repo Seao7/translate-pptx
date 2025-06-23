@@ -49,7 +49,7 @@ def translate_pptx(input_pptx_file):
     return output
 
 # ---- Streamlit App ----
-st.title("PPTX English to Japanese Translator with Progress Bar")
+st.title("PPTX English to Japanese Translator")
 
 uploaded_file = st.file_uploader("Upload a PPTX file", type=["pptx"])
 
