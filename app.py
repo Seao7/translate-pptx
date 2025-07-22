@@ -467,7 +467,7 @@ st.markdown("---")
 st.markdown("Built with ❤️ using Streamlit and Google Translate API")
 
 # Warning about API limits
-with st.expander("⚠️ Important Notes"):
+with st.expander("⚠️ Important Notes ⚠️"):
     st.markdown("""
     - **API Limits**: Google Translate has usage limits. Large presentations may hit rate limits.
     - **Accuracy**: Machine translation may not be perfect. Review important content manually.
