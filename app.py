@@ -23,98 +23,117 @@ def translate_text(text, target_lang='ja', source_lang='auto'):
             else:
                 return text
 
-def translate_slide_text(slide, target_lang, source_lang):
-    """Translate all text in a slide while preserving everything else."""
-    for shape in slide.shapes:
-        if hasattr(shape, "text_frame") and shape.text_frame is not None:
-            for paragraph in shape.text_frame.paragraphs:
-                for run in paragraph.runs:
-                    original_text = run.text.strip()
-                    if len(original_text) > 2 and not original_text.isdigit():
-                        translated_text = translate_text(original_text, target_lang, source_lang)
-                        run.text = translated_text
-                        time.sleep(0.05)
-
 def translate_pptx_standard(input_pptx_file, target_lang='ja', source_lang='auto'):
     """Standard translation - replaces original text with translated text."""
     prs = Presentation(input_pptx_file)
     
-    total_slides = len(prs.slides)
+    # Count total number of text runs for progress bar
+    total_runs = 0
+    text_runs = []
+    
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if hasattr(shape, "text_frame") and shape.text_frame is not None:
+                for paragraph in shape.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        if run.text.strip():  # Only count non-empty text
+                            total_runs += 1
+                            text_runs.append(run)
+    
+    if total_runs == 0:
+        st.warning("No text content found in the presentation.")
+        return None
+    
     progress = st.progress(0)
     status_text = st.empty()
     
-    for i, slide in enumerate(prs.slides):
-        status_text.text(f"Translating slide {i + 1} of {total_slides}...")
-        translate_slide_text(slide, target_lang, source_lang)
-        progress.progress((i + 1) / total_slides)
+    translated_count = 0
+    skipped_count = 0
     
-    status_text.text(f"Translation complete!")
+    for i, run in enumerate(text_runs):
+        original_text = run.text.strip()
+        
+        # Skip very short text or numbers/symbols only
+        if len(original_text) <= 2 or original_text.isdigit():
+            skipped_count += 1
+        else:
+            status_text.text(f"Translating: {original_text[:50]}...")
+            translated_text = translate_text(original_text, target_lang, source_lang)
+            run.text = translated_text
+            translated_count += 1
+            
+            # Small delay to avoid hitting API rate limits
+            time.sleep(0.1)
+        
+        progress.progress((i + 1) / total_runs)
+    
+    status_text.text(f"Translation complete! Translated: {translated_count}, Skipped: {skipped_count}")
     
     output = io.BytesIO()
     prs.save(output)
     output.seek(0)
     return output
 
-def duplicate_slide(presentation, slide_index):
-    """Duplicate a slide within the same presentation."""
-    source_slide = presentation.slides[slide_index]
-    
-    # Get the slide layout
-    slide_layout = source_slide.slide_layout
-    
-    # Create new slide with same layout
-    new_slide = presentation.slides.add_slide(slide_layout)
-    
-    # Copy all shapes from source to new slide
-    for shape in source_slide.shapes:
-        # Skip placeholder shapes (they're part of the layout)
-        if not shape.is_placeholder:
-            # Get the shape's XML element
-            new_element = copy.deepcopy(shape.element)
-            # Add it to the new slide
-            new_slide.shapes._spTree.insert_element_before(new_element, 'p:extLst')
-    
-    # Copy placeholder content
-    for shape in source_slide.shapes:
-        if shape.is_placeholder:
-            ph_type = shape.placeholder_format.type
-            # Find the corresponding placeholder in new slide
-            for new_shape in new_slide.shapes:
-                if (new_shape.is_placeholder and 
-                    new_shape.placeholder_format.type == ph_type):
-                    if hasattr(shape, 'text_frame') and shape.text_frame:
-                        new_shape.text = shape.text
-                    break
-    
-    return new_slide
-
 def translate_pptx_bilingual(input_pptx_file, target_lang='ja', source_lang='auto'):
     """Bilingual translation - creates alternating original and translated slides."""
     
-    # Load the presentation
-    input_pptx_file.seek(0)
-    prs = Presentation(input_pptx_file)
+    # Step 1: Create translated version
+    st.info("Creating translated version...")
+    translated_pptx_bytes = translate_pptx_standard(input_pptx_file, target_lang, source_lang)
     
-    original_slide_count = len(prs.slides)
+    if translated_pptx_bytes is None:
+        return None
+    
+    # Step 2: Load both presentations
+    st.info("Creating bilingual presentation...")
+    
+    # Reset file pointer for original
+    input_pptx_file.seek(0)
+    original_prs = Presentation(input_pptx_file)
+    
+    # Load translated presentation
+    translated_prs = Presentation(translated_pptx_bytes)
+    
+    # Create new presentation starting with original
+    bilingual_prs = Presentation()
+    
+    # Remove the default blank slide
+    if len(bilingual_prs.slides) > 0:
+        rId = bilingual_prs.slides._sldIdLst[0].rId
+        bilingual_prs.part.drop_rel(rId)
+        del bilingual_prs.slides._sldIdLst[0]
+    
+    total_slides = len(original_prs.slides)
     progress = st.progress(0)
     status_text = st.empty()
     
-    # Process slides in reverse order to avoid index issues
-    for i in range(original_slide_count - 1, -1, -1):
-        status_text.text(f"Creating bilingual pair for slide {original_slide_count - i} of {original_slide_count}...")
+    # Add slides alternating: original, translated, original, translated...
+    for i in range(total_slides):
+        status_text.text(f"Adding slide pair {i + 1} of {total_slides}...")
         
-        # Duplicate the slide
-        translated_slide = duplicate_slide(prs, i)
+        # Add original slide
+        original_slide = original_prs.slides[i]
+        slide_layout = bilingual_prs.slide_layouts[0]  # Use default layout
+        new_original = bilingual_prs.slides.add_slide(slide_layout)
         
-        # Translate the duplicated slide
-        translate_slide_text(translated_slide, target_lang, source_lang)
+        # Copy original slide content
+        new_original._element.clear()
+        new_original._element.append(copy.deepcopy(original_slide._element.cSld))
         
-        progress.progress((original_slide_count - i) / original_slide_count)
+        # Add translated slide  
+        translated_slide = translated_prs.slides[i]
+        new_translated = bilingual_prs.slides.add_slide(slide_layout)
+        
+        # Copy translated slide content
+        new_translated._element.clear()
+        new_translated._element.append(copy.deepcopy(translated_slide._element.cSld))
+        
+        progress.progress((i + 1) / total_slides)
     
-    status_text.text(f"Bilingual presentation created with {len(prs.slides)} slides!")
+    status_text.text(f"Bilingual presentation created with {total_slides * 2} slides!")
     
     output = io.BytesIO()
-    prs.save(output)
+    bilingual_prs.save(output)
     output.seek(0)
     return output
 
@@ -189,7 +208,7 @@ with col2:
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    mode_description = "Standard Mode: Replaces original text with translations" if translation_mode == "standard" else "Bilingual Mode: Creates alternating original and translated slides"
+    mode_description = "Standard Mode: Replaces original text with translations" if translation_mode == "standard" else "Bilingual Mode: Alternating original and translated slides"
     st.markdown(f"### {mode_description}")
     st.markdown(f"**Translation: {get_language_name(source_lang)} → {get_language_name(target_lang)}**")
     
@@ -207,7 +226,7 @@ with col1:
         st.info(f"File size: {file_size:.2f} MB")
         
         if translation_mode == "bilingual":
-            st.info("📄 Bilingual mode will create a presentation with double the slides")
+            st.info("📄 Bilingual mode: Original → Translated → Original → Translated...")
         
         # Validation
         if source_lang == target_lang:
@@ -247,26 +266,27 @@ with col2:
     st.markdown("### ℹ️ How to Use")
     st.markdown("""
     1. **Choose translation mode**
-    2. **Select languages** in the sidebar
+    2. **Select languages** 
     3. **Upload** your PPTX file
-    4. **Click translate** and wait
+    4. **Click translate** 
     5. **Download** the result
     
     ### 🔧 Features
-    - **Two translation modes**
-    - **Image preservation**
-    - **Formatting preservation**
+    - **Standard**: Replace original text
+    - **Bilingual**: Alternating slides
     - **Progress tracking**
+    - **Smart text filtering**
     
     ### 📝 Notes
-    - **Bilingual mode** doubles slide count
-    - Images and formatting preserved
-    - Works with complex layouts
+    - Bilingual mode doubles slide count
+    - Formatting preserved
+    - Images preserved
     """)
 
 # Footer
 st.markdown("---")
 st.markdown("Built with ❤️ using Streamlit and Google Translate API")
+
 
 
 # Warning about API limits
