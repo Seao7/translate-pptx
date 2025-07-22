@@ -85,228 +85,89 @@ def translate_pptx_standard(input_pptx_file, target_lang='ja', source_lang='auto
     output.seek(0)
     return output
 
-def copy_slide_with_layout(source_slide, target_prs):
-    """Copy a slide while preserving layout, colors, and all visual elements."""
-    # Try to find a matching layout or use a blank one
-    try:
-        slide_layout = target_prs.slide_layouts[source_slide.slide_layout.name] if hasattr(source_slide, 'slide_layout') else target_prs.slide_layouts[0]
-    except:
-        slide_layout = target_prs.slide_layouts[0]  # Fallback to blank layout
-    
-    new_slide = target_prs.slides.add_slide(slide_layout)
-    
-    # Copy slide background if it exists
-    try:
-        if hasattr(source_slide, 'background') and hasattr(new_slide, 'background'):
-            new_slide.background = source_slide.background
-    except:
-        pass
-    
-    return new_slide
-
-def copy_shape_completely(source_shape, target_slide):
-    """Copy a shape completely including all formatting, colors, and properties."""
-    try:
-        if hasattr(source_shape, "text_frame") and source_shape.text_frame is not None:
-            # Text box or shape with text
-            new_shape = target_slide.shapes.add_textbox(
-                source_shape.left, 
-                source_shape.top, 
-                source_shape.width, 
-                source_shape.height
-            )
-            
-            # Copy text frame properties
-            new_shape.text_frame.clear()
-            new_shape.text_frame.margin_left = source_shape.text_frame.margin_left
-            new_shape.text_frame.margin_right = source_shape.text_frame.margin_right
-            new_shape.text_frame.margin_top = source_shape.text_frame.margin_top
-            new_shape.text_frame.margin_bottom = source_shape.text_frame.margin_bottom
-            new_shape.text_frame.word_wrap = source_shape.text_frame.word_wrap
-            new_shape.text_frame.auto_size = source_shape.text_frame.auto_size
-            
-            # Copy all paragraphs
-            for i, paragraph in enumerate(source_shape.text_frame.paragraphs):
-                if i == 0:
-                    new_paragraph = new_shape.text_frame.paragraphs[0]
-                else:
-                    new_paragraph = new_shape.text_frame.add_paragraph()
-                
-                # Copy paragraph properties
-                new_paragraph.alignment = paragraph.alignment
-                new_paragraph.space_before = paragraph.space_before
-                new_paragraph.space_after = paragraph.space_after
-                new_paragraph.line_spacing = paragraph.line_spacing
-                
-                # Copy all runs in the paragraph
-                for j, run in enumerate(paragraph.runs):
-                    if j == 0 and len(new_paragraph.runs) > 0:
-                        new_run = new_paragraph.runs[0]
-                    else:
-                        new_run = new_paragraph.add_run()
-                    
-                    new_run.text = run.text
-                    
-                    # Copy font properties
-                    try:
-                        new_run.font.name = run.font.name
-                        new_run.font.size = run.font.size
-                        new_run.font.bold = run.font.bold
-                        new_run.font.italic = run.font.italic
-                        new_run.font.underline = run.font.underline
-                        if hasattr(run.font, 'color') and run.font.color:
-                            new_run.font.color.rgb = run.font.color.rgb
-                    except:
-                        pass
-            
-            # Copy shape fill and line properties
-            try:
-                if hasattr(source_shape, 'fill'):
-                    new_shape.fill.solid()
-                    if hasattr(source_shape.fill, 'fore_color'):
-                        new_shape.fill.fore_color.rgb = source_shape.fill.fore_color.rgb
-                
-                if hasattr(source_shape, 'line'):
-                    new_shape.line.color.rgb = source_shape.line.color.rgb
-                    new_shape.line.width = source_shape.line.width
-            except:
-                pass
-                
-            return new_shape
-            
-        elif source_shape.shape_type == 13:  # Picture/Image
-            # For images, we need to extract and re-insert
-            try:
-                image_stream = source_shape.image.blob
-                new_shape = target_slide.shapes.add_picture(
-                    io.BytesIO(image_stream),
-                    source_shape.left,
-                    source_shape.top,
-                    source_shape.width,
-                    source_shape.height
-                )
-                return new_shape
-            except Exception as e:
-                print(f"Failed to copy image: {e}")
-                return None
-                
-        else:
-            # For other shapes (rectangles, circles, diagrams, etc.)
-            try:
-                # This is a more complex case - we'll try to duplicate the shape
-                # For basic shapes, we can try to recreate them
-                if source_shape.shape_type in [1, 2, 3, 4, 5]:  # Basic shapes
-                    # Add a rectangle as placeholder and try to copy properties
-                    new_shape = target_slide.shapes.add_shape(
-                        source_shape.auto_shape_type,
-                        source_shape.left,
-                        source_shape.top,
-                        source_shape.width,
-                        source_shape.height
-                    )
-                    
-                    # Copy fill properties
-                    try:
-                        if hasattr(source_shape.fill, 'solid') and source_shape.fill.type == 1:  # Solid fill
-                            new_shape.fill.solid()
-                            new_shape.fill.fore_color.rgb = source_shape.fill.fore_color.rgb
-                        
-                        # Copy line properties
-                        if hasattr(source_shape, 'line'):
-                            new_shape.line.color.rgb = source_shape.line.color.rgb
-                            new_shape.line.width = source_shape.line.width
-                    except:
-                        pass
-                        
-                    return new_shape
-                else:
-                    print(f"Unsupported shape type: {source_shape.shape_type}")
-                    return None
-                    
-            except Exception as e:
-                print(f"Failed to copy shape: {e}")
-                return None
-                
-    except Exception as e:
-        print(f"Error in copy_shape_completely: {e}")
-        return None
-
-def translate_slide_text(slide, target_lang='ja', source_lang='auto'):
-    """Translate text in a slide while preserving all formatting."""
-    translated_count = 0
-    skipped_count = 0
-    
-    for shape in slide.shapes:
-        if hasattr(shape, "text_frame") and shape.text_frame is not None:
-            for paragraph in shape.text_frame.paragraphs:
-                for run in paragraph.runs:
-                    original_text = run.text.strip()
-                    
-                    # Skip very short text or numbers/symbols only
-                    if original_text and len(original_text) > 2 and not original_text.isdigit():
-                        translated_text = translate_text(original_text, target_lang, source_lang)
-                        run.text = translated_text
-                        translated_count += 1
-                        time.sleep(0.1)  # Rate limiting
-                    else:
-                        skipped_count += 1
-    
-    return translated_count, skipped_count
-
 def translate_pptx_bilingual(input_pptx_file, target_lang='ja', source_lang='auto'):
-    """Bilingual translation - creates alternating original and translated slides with full formatting."""
-    prs = Presentation(input_pptx_file)
-    new_prs = copy.deepcopy(prs)  # Start with a deep copy to preserve themes and layouts
+    """Bilingual translation - creates alternating original and translated slides by combining two presentations."""
     
-    # Clear all slides from the new presentation
-    slide_ids_to_remove = [slide.slide_id for slide in new_prs.slides]
+    # Step 1: Create standard translated version
+    st.info("Step 1/2: Creating translated version...")
+    translated_pptx_bytes = translate_pptx_standard(input_pptx_file, target_lang, source_lang)
+    
+    if translated_pptx_bytes is None:
+        return None
+    
+    # Step 2: Load original and translated presentations
+    st.info("Step 2/2: Creating bilingual version...")
+    
+    # Reset file pointer for original
+    input_pptx_file.seek(0)
+    original_prs = Presentation(input_pptx_file)
+    
+    # Load translated presentation
+    translated_prs = Presentation(translated_pptx_bytes)
+    
+    # Create new bilingual presentation starting with original structure
+    bilingual_prs = copy.deepcopy(original_prs)
+    
+    # Clear all slides from bilingual presentation
+    slide_ids_to_remove = [slide.slide_id for slide in bilingual_prs.slides]
     for slide_id in slide_ids_to_remove:
-        for i, slide in enumerate(new_prs.slides):
+        for i, slide in enumerate(bilingual_prs.slides):
             if slide.slide_id == slide_id:
-                rId = new_prs.slides._sldIdLst[i].rId
-                new_prs.part.drop_rel(rId)
-                del new_prs.slides._sldIdLst[i]
+                try:
+                    rId = bilingual_prs.slides._sldIdLst[i].rId
+                    bilingual_prs.part.drop_rel(rId)
+                    del bilingual_prs.slides._sldIdLst[i]
+                except:
+                    pass
                 break
     
-    total_slides = len(prs.slides)
-    if total_slides == 0:
-        st.warning("No slides found in the presentation.")
-        return None
-    
+    # Step 3: Add slides alternating between original and translated
+    total_slides = len(original_prs.slides)
     progress = st.progress(0)
     status_text = st.empty()
     
-    total_translated = 0
-    total_skipped = 0
+    for i in range(total_slides):
+        status_text.text(f"Adding slide pair {i + 1} of {total_slides}...")
+        
+        # Add original slide
+        original_slide = original_prs.slides[i]
+        original_slide_layout = bilingual_prs.slide_layouts[original_slide.slide_layout.slide_layout.name] if hasattr(original_slide.slide_layout, 'slide_layout') else bilingual_prs.slide_layouts[0]
+        
+        try:
+            # Use the duplicate_slide method if available (more reliable)
+            new_original = bilingual_prs.slides.add_slide(original_slide_layout)
+            
+            # Copy slide content using XML manipulation (more reliable than shape-by-shape)
+            new_original._element.clear()
+            new_original._element.append(copy.deepcopy(original_slide._element.cSld))
+            
+        except Exception as e:
+            # Fallback method
+            new_original = bilingual_prs.slides.add_slide(original_slide_layout)
+            # This will have the layout but might miss some content
+            print(f"Fallback copying for original slide {i+1}: {e}")
+        
+        # Add translated slide
+        translated_slide = translated_prs.slides[i]
+        translated_slide_layout = bilingual_prs.slide_layouts[translated_slide.slide_layout.slide_layout.name] if hasattr(translated_slide.slide_layout, 'slide_layout') else bilingual_prs.slide_layouts[0]
+        
+        try:
+            # Use the same XML method for consistency
+            new_translated = bilingual_prs.slides.add_slide(translated_slide_layout)
+            new_translated._element.clear()
+            new_translated._element.append(copy.deepcopy(translated_slide._element.cSld))
+            
+        except Exception as e:
+            # Fallback method
+            new_translated = bilingual_prs.slides.add_slide(translated_slide_layout)
+            print(f"Fallback copying for translated slide {i+1}: {e}")
+        
+        progress.progress((i + 1) / total_slides)
     
-    for slide_idx, slide in enumerate(prs.slides):
-        status_text.text(f"Processing slide {slide_idx + 1} of {total_slides}...")
-        
-        # Add original slide (complete copy)
-        original_slide = copy_slide_with_layout(slide, new_prs)
-        
-        # Copy all shapes to original slide
-        for shape in slide.shapes:
-            copy_shape_completely(shape, original_slide)
-        
-        # Add translated slide (complete copy)
-        translated_slide = copy_slide_with_layout(slide, new_prs)
-        
-        # Copy all shapes to translated slide
-        for shape in slide.shapes:
-            copy_shape_completely(shape, translated_slide)
-        
-        # Now translate the text in the translated slide
-        translated_count, skipped_count = translate_slide_text(translated_slide, target_lang, source_lang)
-        total_translated += translated_count
-        total_skipped += skipped_count
-        
-        progress.progress((slide_idx + 1) / total_slides)
-    
-    status_text.text(f"Bilingual presentation created! Translated: {total_translated}, Skipped: {total_skipped}")
+    status_text.text(f"Bilingual presentation created with {total_slides * 2} slides!")
     
     output = io.BytesIO()
-    new_prs.save(output)
+    bilingual_prs.save(output)
     output.seek(0)
     return output
 
@@ -467,7 +328,7 @@ st.markdown("---")
 st.markdown("Built with ❤️ using Streamlit and Google Translate API")
 
 # Warning about API limits
-with st.expander("⚠️ Important Notes ⚠️"):
+with st.expander("⚠️ Important Notes"):
     st.markdown("""
     - **API Limits**: Google Translate has usage limits. Large presentations may hit rate limits.
     - **Accuracy**: Machine translation may not be perfect. Review important content manually.
