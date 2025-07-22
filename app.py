@@ -40,10 +40,12 @@ def translate_pptx_standard(input_pptx_file, target_lang='ja', source_lang='auto
     return output
 
 def merge_presentations_alternating(orig_bytes, trans_bytes):
+    from pptx import Presentation
+    import copy, io
     original = Presentation(orig_bytes)
     translated = Presentation(trans_bytes)
     output_ppt = Presentation()
-    # Remove default slide if present
+    # Remove default empty slide
     if len(output_ppt.slides) > 0:
         rId = output_ppt.slides._sldIdLst[0].rId
         output_ppt.part.drop_rel(rId)
@@ -52,7 +54,8 @@ def merge_presentations_alternating(orig_bytes, trans_bytes):
     for idx in range(slide_count):
         for src_prs in [original, translated]:
             slide = src_prs.slides[idx]
-            layout = output_ppt.slide_layouts[slide.slide_layout.slide_layout_id or 0]
+            # Always use default layout (works regardless)
+            layout = output_ppt.slide_layouts[0]
             new_slide = output_ppt.slides.add_slide(layout)
             new_slide._element.clear()
             new_slide._element.append(copy.deepcopy(slide._element.cSld))
